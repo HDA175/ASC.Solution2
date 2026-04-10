@@ -1,40 +1,54 @@
-using ASC.Solution.Configuration;
+﻿using ASC.DataAccess;
 using ASC.Solution.Services;
-using ASC.Web.Services;
+using ASC.Web.Configuration;
 using ASC.Web.Data;
+using ASC.Web.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-
+using Microsoft.Extensions.Options;
+using ASC.DataAccess;
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+// ================== DB ==================
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ??
+    throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
-builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
-builder.Services.AddDefaultIdentity<IdentityUser>(options => options.SignIn.RequireConfirmedAccount = true)
-    .AddEntityFrameworkStores<ApplicationDbContext>();
+// ================== Identity ==================
+builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
+{
+    options.User.RequireUniqueEmail = true;
+})
+.AddEntityFrameworkStores<ApplicationDbContext>()
+.AddDefaultTokenProviders();
 
-builder.Services.AddOptions();
-builder.Services.Configure<ASC.Solution.Configuration.ApplicationSettings>(builder.Configuration.GetSection("AppSettings"));
+// ================== AppSettings ==================
+builder.Services.Configure<ApplicationSettings>(
+    builder.Configuration.GetSection("AppSettings"));
 
-builder.Services.AddControllersWithViews();
-
+// ================== Services ==================
 builder.Services.AddTransient<IEmailSender, AuthMessageSender>();
 builder.Services.AddTransient<ISmsSender, AuthMessageSender>();
 
+builder.Services.AddSingleton<IIdentitySeed, IdentitySeed>();
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(connectionString));
+builder.Services.AddControllersWithViews();
+builder.Services.AddRazorPages(); // 🔥 thêm dòng này
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// ================== Middleware ==================
 if (app.Environment.IsDevelopment())
 {
-    app.UseMigrationsEndPoint();
+    app.UseDeveloperExceptionPage();
 }
 else
 {
     app.UseExceptionHandler("/Home/Error");
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 
@@ -43,11 +57,27 @@ app.UseStaticFiles();
 
 app.UseRouting();
 
+app.UseAuthentication(); // 🔥 QUAN TRỌNG (thiếu cái này là lỗi login)
 app.UseAuthorization();
 
 app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=Index}/{id?}");
+
 app.MapRazorPages();
+
+// ================== Seed Data ==================
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+
+    var seed = services.GetRequiredService<IIdentitySeed>();
+
+    await seed.Seed(
+        services.GetRequiredService<UserManager<IdentityUser>>(),
+        services.GetRequiredService<RoleManager<IdentityRole>>(),
+        services.GetRequiredService<IOptions<ApplicationSettings>>()
+    );
+}
 
 app.Run();
